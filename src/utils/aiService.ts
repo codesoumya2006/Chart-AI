@@ -1,0 +1,290 @@
+import { MOCK_AI_RESPONSES } from '../constants';
+import type { Attachment, AIStructuredResponse } from '../types';
+import { removeGeminiKey } from './geminiKeyManager';
+
+/**
+ * Custom error class for Gemini API errors
+ */
+export class GeminiAPIError extends Error {
+  constructor(
+    message: string,
+    public readonly code?: string,
+    public readonly shouldRemoveKey?: boolean
+  ) {
+    super(message);
+    this.name = 'GeminiAPIError';
+  }
+}
+
+/**
+ * Checks if an error is a quota or auth related error
+ */
+const isQuotaOrAuthError = (errorMessage: string): boolean => {
+  const errorLower = errorMessage.toLowerCase();
+  return (
+    errorLower.includes('quota') ||
+    errorLower.includes('exceeded') ||
+    errorLower.includes('permission denied') ||
+    errorLower.includes('unauthenticated') ||
+    errorLower.includes('invalid api key') ||
+    errorLower.includes('api key not valid')
+  );
+};
+
+export const generateAIContent = async (
+  mode: string,
+  prompt: string,
+  apiKey: string,
+  attachment: Attachment | null = null,
+  contextText: string = ''
+): Promise<any | AIStructuredResponse> => {
+  // Require API key from user's localStorage
+  const key = apiKey;
+  
+  if (!key || key === 'demo') {
+    await new Promise(r => setTimeout(r, 1000));
+    if (mode === 'explain') return MOCK_AI_RESPONSES.explain;
+    if (mode === 'quiz') return MOCK_AI_RESPONSES.quiz;
+    if (mode === 'decompose') return MOCK_AI_RESPONSES.decompose;
+    if (mode === 'brainstorm') return MOCK_AI_RESPONSES.brainstorm;
+    if (mode === 'enhance') return MOCK_AI_RESPONSES.enhance;
+    if (mode === 'flow') return MOCK_AI_RESPONSES.flow;
+    return [];
+  }
+
+  try {
+    let userPrompt = "";
+    let contextMessage = "";
+
+    // If attachment exists, add it to context
+    if (attachment) {
+      if (attachment.fileType === 'text') {
+        contextMessage += `\n\n[Node Attachment Content]:\n${attachment.content}\n\n`;
+      } else if (attachment.fileType === 'image') {
+        contextMessage += `\n\n[Attached Image] Analyze this image content.`;
+      }
+    }
+
+    if (contextText) {
+      const truncatedContext = contextText.slice(0, 500000);
+      contextMessage += `\n\n[Source Material for Study Plan]:\n${truncatedContext}\n\n`;
+    }
+
+    if (mode === 'explain') {
+      userPrompt = `Analyze and explain the concept or content found here: "${prompt}"${contextMessage}
+
+Return a JSON object with the following structure:
+{
+  "summary": "A clear, concise summary (2-3 sentences)",
+  "key_points": ["Key point 1", "Key point 2", "Key point 3", ...],
+  "suggested_next_steps": ["Step 1", "Step 2", ...] (optional)
+}
+
+Return ONLY valid JSON, no markdown, no code blocks.`;
+    } else if (mode === 'quiz') {
+      userPrompt = `Generate 3 short quiz questions (with answers in parentheses) based on this content: "${prompt}"${contextMessage}. Return ONLY a JSON array of strings.`;
+    } else if (mode === 'enhance') {
+      userPrompt = `Analyze and enhance the content found here: "${prompt}"${contextMessage}
+
+Return a JSON object with the following structure:
+{
+  "summary": "An improved, expanded summary of the content",
+  "key_points": ["Enhanced key point 1", "Enhanced key point 2", ...],
+  "suggested_next_steps": ["Recommended action 1", "Recommended action 2", ...] (optional)
+}
+
+Return ONLY valid JSON, no markdown, no code blocks.`;
+    } else if (mode === 'flow') {
+      const baseInstruction = contextText 
+        ? `Analyze the "[Source Material]" provided below. Create a structured learning path/flowchart to master this content.`
+        : `Create a structured study plan for: "${prompt}".`;
+
+      userPrompt = `${baseInstruction} Return a JSON object with a "steps" array. Each step object must have: 
+      - id (number)
+      - title (string)
+      - type (choose from: 'lecture', 'concept', 'question', 'task', 'summary')
+      - description (short summary of what to learn)
+      - dependsOn (array of number IDs referring to previous steps)
+      
+      Create between 5 to 10 steps. Ensure dependencies are logical. No markdown.
+      ${contextMessage}`;
+    } else {
+      userPrompt = `Generate 3 related sub-topics or tasks for: "${prompt}"${contextMessage}. Return ONLY a JSON array of strings. No markdown.`;
+    }
+
+    // Construct parts payload
+    const parts: any[] = [{ text: userPrompt }];
+    
+    // Add Image Part if exists
+    if (attachment && attachment.fileType === 'image' && attachment.url) {
+      const base64Data = attachment.url.split(',')[1];
+      const mimeType = attachment.url.split(';')[0].split(':')[1];
+      parts.push({
+        inlineData: {
+          mimeType: mimeType,
+          data: base64Data
+        }
+      });
+    }
+
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${key}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: parts }] })
+    });
+    
+    const data = await response.json();
+    if (data.error) {
+      const errorMessage = data.error.message || "Unknown API Error";
+      
+      // Check if this is a quota or auth error
+      if (isQuotaOrAuthError(errorMessage)) {
+        removeGeminiKey();
+        throw new GeminiAPIError(
+          errorMessage,
+          data.error.code,
+          true
+        );
+      }
+      
+      throw new Error(errorMessage);
+    }
+
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    
+    // Handle structured output for explain and enhance modes
+    if (mode === 'explain' || mode === 'enhance') {
+      try {
+        // Try to parse as JSON first
+        const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        const json = JSON.parse(cleanText);
+        
+        // Validate structured response format
+        if (json.summary && Array.isArray(json.key_points)) {
+          return json as AIStructuredResponse;
+        }
+        
+        // Fallback: if JSON doesn't match structure, wrap it
+        return {
+          summary: json.summary || text,
+          key_points: json.key_points || (typeof json === 'string' ? [json] : []),
+          suggested_next_steps: json.suggested_next_steps || undefined
+        } as AIStructuredResponse;
+      } catch (e) {
+        // If parsing fails, treat as plain text and wrap it
+        console.warn("JSON parse error, falling back to text", e);
+        return {
+          summary: text,
+          key_points: text.split('\n').filter((l: string) => l.trim().length > 0).slice(0, 5),
+          suggested_next_steps: undefined
+        } as AIStructuredResponse;
+      }
+    }
+
+    try {
+      // Clean the text - remove markdown code blocks and extra whitespace
+      let cleanText = text.trim();
+      // Remove markdown code blocks
+      cleanText = cleanText.replace(/```json/g, '').replace(/```/g, '').trim();
+      // Try to extract JSON if it's wrapped in other text
+      const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        cleanText = jsonMatch[0];
+      }
+      
+      const json = JSON.parse(cleanText);
+      
+      if (mode === 'flow') {
+        // Handle different response formats
+        if (Array.isArray(json)) {
+          return json; // Already an array
+        } else if (json.steps && Array.isArray(json.steps)) {
+          return json.steps; // Object with steps array
+        } else if (json.step && Array.isArray(json.step)) {
+          return json.step; // Alternative key name
+        } else {
+          // Try to convert object to array if it has numeric keys
+          const keys = Object.keys(json);
+          if (keys.length > 0 && keys.every(k => !isNaN(Number(k)))) {
+            return keys.map(k => json[k]);
+          }
+          console.warn("Unexpected flow format:", json);
+          return [];
+        }
+      }
+      return json;
+    } catch (e) {
+      console.warn("JSON parse error", e, "Text:", text);
+      if (mode === 'flow') {
+        // Try to extract steps from text if JSON parsing fails
+        const lines = text.split('\n').filter((l: string) => l.trim().length > 0);
+        if (lines.length > 0) {
+          console.warn("Failed to parse flow JSON, returning empty array");
+        }
+        return [];
+      }
+      return text.split('\n').filter((l: string) => l.length > 0);
+    }
+  } catch (error) {
+    console.error("AI Request Failed", error);
+    throw error; 
+  }
+};
+
+export const generateChatResponse = async (
+  userQuery: string,
+  visibleNodesContext: string,
+  apiKey: string
+): Promise<string> => {
+  // Require API key from user's localStorage
+  const key = apiKey;
+  
+  if (!key || key === 'demo') {
+    await new Promise(r => setTimeout(r, 1500));
+    return "Based on the visible nodes in your flow, I can see connections between different concepts. However, please set up your API key in Settings to get detailed responses about your specific content.";
+  }
+
+  try {
+    const systemPrompt = `You are an AI assistant helping a user understand their learning flow. You have access to the text content of all currently visible nodes on their canvas. Analyze the relationships, concepts, and content across these nodes to provide helpful, context-aware answers.
+
+Visible Nodes Context:
+${visibleNodesContext}
+
+User Question: ${userQuery}
+
+Please provide a clear, helpful answer based on the visible nodes' content. If the question relates to specific nodes, reference them by their titles or content. Be concise but thorough.`;
+
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${key}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        contents: [{ 
+          parts: [{ text: systemPrompt }] 
+        }] 
+      })
+    });
+    
+    const data = await response.json();
+    if (data.error) {
+      const errorMessage = data.error.message || "Unknown API Error";
+      
+      // Check if this is a quota or auth error
+      if (isQuotaOrAuthError(errorMessage)) {
+        removeGeminiKey();
+        throw new GeminiAPIError(
+          errorMessage,
+          data.error.code,
+          true
+        );
+      }
+      
+      throw new Error(errorMessage);
+    }
+
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "I couldn't generate a response. Please try again.";
+    return text;
+  } catch (error) {
+    console.error("Chat Request Failed", error);
+    throw error;
+  }
+};
