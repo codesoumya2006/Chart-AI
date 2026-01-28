@@ -170,7 +170,7 @@ FlowDo is a modern, web-based learning management tool that combines visual grap
 1. **Clone the repository**
    ```bash
    git clone <repository-url>
-   cd FlowDo
+   cd Chart-AI
    ```
 
 2. **Install dependencies**
@@ -425,8 +425,6 @@ For issues, questions, or suggestions, please open an issue on the GitHub reposi
 <div align="center">
 
 **Built with ❤️ for learners and educators**
-
-⭐ Star this repo if you find it helpful!
 
 </div>
 
