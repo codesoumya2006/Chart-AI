@@ -1,8 +1,8 @@
-# FlowDo - AI-Powered Learning Flow Builder
+# Chart-AI - AI-Powered Learning Flow Builder
 
 <div align="center">
 
-![FlowDo](https://img.shields.io/badge/FlowDo-Learning%20Flow%20Builder-purple?style=for-the-badge)
+![Chart-AI](https://img.shields.io/badge/FlowDo-Learning%20Flow%20Builder-purple?style=for-the-badge)
 ![React](https://img.shields.io/badge/React-18.3.1-blue?style=for-the-badge&logo=react)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.5.3-blue?style=for-the-badge&logo=typescript)
 ![Vite](https://img.shields.io/badge/Vite-5.4.2-646CFF?style=for-the-badge&logo=vite)
@@ -17,7 +17,7 @@
 
 ## 📖 Overview
 
-FlowDo is a modern, web-based learning management tool that combines visual graph-based learning flows with AI-powered content generation. It allows students and educators to create interactive study plans, connect learning concepts, and leverage AI to explain, enhance, and generate educational content.
+Chart-AI is a modern, web-based learning management tool that combines visual graph-based learning flows with AI-powered content generation. It allows students and educators to create interactive study plans, connect learning concepts, and leverage AI to explain, enhance, and generate educational content.
 
 ### Key Highlights
 
